@@ -1,0 +1,46 @@
+syntax = "proto3";
+package fatima.opm.v2;
+option go_package = "github.com/fatima-go/fatima-opm/api;api";
+
+message Empty {}
+message Capabilities { string server = 1; uint32 api_version = 2; repeated string features = 3; string package_id = 4; string platform = 5; string instance_id = 6; int64 artifact_ttl_seconds = 7; }
+service Discovery { rpc GetCapabilities(Empty) returns (Capabilities); }
+
+message LoginRequest { string username = 1; string password = 2; }
+message Session { string token = 1; string username = 2; string role = 3; int64 expires_at = 4; }
+message ValidateRequest { string role = 1; string operation_id = 2; string sha256 = 3; string package_id = 4; }
+service Identity { rpc Login(LoginRequest) returns (Session); rpc Validate(ValidateRequest) returns (Session); }
+
+message Artifact { string id = 1; string filename = 2; string process = 3; string sha256 = 4; int64 size = 5; repeated string platforms = 6; string build_json = 7; string uploaded_by = 8; int64 uploaded_at = 9; int64 expires_at = 10; bool expired = 11; }
+message UploadHeader { string request_id = 1; string filename = 2; int64 size = 3; string sha256 = 4; }
+message UploadChunk { UploadHeader header = 1; bytes data = 2; }
+message ArtifactQuery { string id = 1; string process = 2; }
+message ArtifactList { repeated Artifact artifacts = 1; }
+service Artifacts { rpc Upload(stream UploadChunk) returns (Artifact); rpc List(ArtifactQuery) returns (ArtifactList); rpc Get(ArtifactQuery) returns (Artifact); }
+
+message Target { string package_id = 1; string group = 2; string endpoint = 3; string platform = 4; bool supported = 5; string reason = 6; bool legacy = 7; bool cancel_supported = 8; }
+message TargetQuery { string group = 1; }
+message TargetList { repeated Target targets = 1; }
+message CreateRollout { string request_id = 1; string artifact_id = 2; string group = 3; repeated string package_ids = 4; string first_package_id = 5; ManagementCredential management = 6; }
+message RolloutQuery { string id = 1; }
+message RolloutList { repeated Rollout rollouts = 1; }
+message RolloutAction { string id = 1; string action = 2; uint64 expected_revision = 3; }
+message WatchRequest { string id = 1; uint64 after_revision = 2; }
+message Event { uint64 sequence = 1; int64 at = 2; string stage = 3; string state = 4; string message = 5; int64 current = 6; int64 total = 7; }
+message Operation { string id = 1; string artifact_id = 2; string sha256 = 3; string process = 4; string package_id = 5; string state = 6; repeated Event events = 7; string error = 8; int64 started_at = 9; int64 finished_at = 10; string revision_path = 11; string previous_revision = 12; }
+message TargetRun { Target target = 1; Operation operation = 2; int64 sent_bytes = 3; int64 total_bytes = 4; repeated Operation previous_attempts = 5; }
+message Rollout { string id = 1; Artifact artifact = 2; string group = 3; repeated TargetRun targets = 4; string state = 5; string created_by = 6; int64 created_at = 7; uint64 revision = 8; string message = 9; bool remaining_approved = 10; bool cancel_requested = 11; string management_session_id = 12; string end_reason = 13; int64 last_checked_at = 14; int64 next_check_at = 15; bool blocks_deployment = 16; int64 next_target_start_at = 17; // Unix milliseconds; zero when no inter-target wait is scheduled.
+ }
+// Management belongs to the creating CLI, never to a Watch stream. Times are Unix milliseconds.
+message ManagementCredential { string id = 1; string token = 2; }
+message ManagementSession { string id = 1; string token = 2; int64 last_seen_at = 3; int64 expires_at = 4; string rollout_id = 5; string state = 6; }
+service DeploymentManagement { rpc Open(Empty) returns (ManagementSession); rpc Heartbeat(ManagementCredential) returns (ManagementSession); rpc Detach(ManagementCredential) returns (ManagementSession); }
+// Returned as gRPC status details on a conflicting Create/Act; no string parsing needed.
+message RolloutConflict { string rollout_id = 1; string group = 2; string process = 3; }
+service Deployments { rpc Targets(TargetQuery) returns (TargetList); rpc Create(CreateRollout) returns (Rollout); rpc List(Empty) returns (RolloutList); rpc Get(RolloutQuery) returns (Rollout); rpc Act(RolloutAction) returns (Rollout); rpc Watch(WatchRequest) returns (stream Rollout); }
+
+message OperationSpec { string id = 1; string artifact_id = 2; string sha256 = 3; int64 size = 4; string process = 5; string package_id = 6; int64 expires_at = 7; }
+message StageChunk { OperationSpec spec = 1; bytes data = 2; }
+message OperationQuery { string id = 1; }
+service PackageDeployment { // Cancel seals an unstarted ID durably, even before Stage arrives. Running work is observed, not killed.
+ rpc Cancel(OperationSpec) returns (Operation); rpc Stage(stream StageChunk) returns (Operation); rpc Start(OperationQuery) returns (Operation); rpc Get(OperationQuery) returns (Operation); rpc Watch(OperationQuery) returns (stream Operation); }

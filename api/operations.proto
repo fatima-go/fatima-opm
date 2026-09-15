@@ -1,0 +1,86 @@
+syntax = "proto3";
+package fatima.opm.v2;
+option go_package = "github.com/fatima-go/fatima-opm/api;api";
+import "api/control.proto";
+
+message PackageQuery { string package_id = 1; }
+service Routing { rpc Resolve(PackageQuery) returns (Target); }
+
+message PackageEntry { Target target = 1; int64 registered_at = 2; string state = 3; string detail = 4; int64 checked_at = 5; string transport = 6; }
+message PackageCatalog { repeated PackageEntry packages = 1; int64 observed_at = 2; }
+service PackageInventory {
+ rpc List(Empty) returns (PackageCatalog);
+ rpc Watch(Empty) returns (stream PackageCatalog);
+}
+
+message CronEntry { string process = 1; string name = 2; string description = 3; string spec = 4; string sample = 5; }
+message CronHour { int32 hour = 1; repeated CronEntry jobs = 2; }
+message CronCatalog { string package_id = 1; repeated CronEntry jobs = 2; repeated CronHour hours = 3; }
+message CronRequest { string request_id = 1; string process = 2; string job = 3; string arguments = 4; }
+// REQUESTED means delivery only. It must never be presented as batch success.
+message ControlOperation {
+  string id = 1; string kind = 2; string package_id = 3; string state = 4;
+  string message = 5; repeated Event events = 6; int64 started_at = 7; int64 finished_at = 8;
+}
+service CronControl {
+  rpc List(Empty) returns (CronCatalog);
+  rpc Rerun(CronRequest) returns (ControlOperation);
+  rpc Get(OperationQuery) returns (ControlOperation);
+  rpc Watch(OperationQuery) returns (stream ControlOperation);
+}
+
+message ProcessQuery { string timezone = 1; }
+message ProcessEntry {
+ string name = 1; string pid = 2; string state = 3; string group = 4;
+ string cpu = 5; string memory = 6; string fd = 7; string threads = 8;
+ string started_at = 9; string ic = 10; int32 index = 11; bool opm = 12;
+}
+message ProcessCatalog { string package_id = 1; string group = 2; string platform = 3; int32 ha_status = 4; int32 ps_status = 5; repeated ProcessEntry processes = 6; int64 observed_at = 7; }
+message ProcessRequest { string request_id = 1; repeated string processes = 2; }
+service ProcessControl {
+ rpc Catalog(ProcessQuery) returns (ProcessCatalog);
+ rpc WatchCatalog(ProcessQuery) returns (stream ProcessCatalog);
+ rpc Stop(ProcessRequest) returns (ControlOperation);
+ rpc Start(ProcessRequest) returns (ControlOperation);
+ rpc Get(OperationQuery) returns (ControlOperation);
+ rpc Watch(OperationQuery) returns (stream ControlOperation);
+}
+
+message RegistryQuery { string package_id = 1; string timezone = 2; }
+message ProcessGroup { int32 id = 1; string name = 2; }
+message RegistryCatalog { ProcessCatalog catalog = 1; repeated ProcessGroup groups = 2; string revision = 3; }
+message RegistryRequest {
+ string package_id = 1; string request_id = 2; string action = 3; string process = 4;
+ string group = 5; string expected_revision = 6;
+}
+message RegistryPlan { RegistryRequest request = 1; repeated string effects = 2; }
+message RegistryOperationQuery { string package_id = 1; string id = 2; }
+// Jupiter forwards this service; Juno owns validation, effects and durable results.
+service ProcessRegistry {
+ rpc Catalog(RegistryQuery) returns (RegistryCatalog);
+ rpc Preview(RegistryRequest) returns (RegistryPlan);
+ rpc Apply(RegistryRequest) returns (ControlOperation);
+ rpc Get(RegistryOperationQuery) returns (ControlOperation);
+ rpc Watch(RegistryOperationQuery) returns (stream ControlOperation);
+}
+
+// level is one of error, warn, info, debug or trace; empty when unset.
+message LogLevelEntry { string process = 1; string group = 2; string level = 3; bool opm = 4; }
+message LogLevelCatalog { string package_id = 1; repeated LogLevelEntry entries = 2; }
+message LogLevelRequest { string process = 1; string level = 2; }
+// Juno updates the package loglevels file; each process applies it on its next one-second check.
+service LogLevelControl {
+ rpc List(Empty) returns (LogLevelCatalog);
+ rpc Set(LogLevelRequest) returns (LogLevelEntry);
+}
+
+// deployed_at is Unix time in milliseconds; build fields come from the artifact's deployment.json.
+message DeploymentRecord {
+ string process = 1; string group = 2; int64 deployed_at = 3; string build_user = 4;
+ string build_time = 5; string git_branch = 6; string git_commit = 7; string git_message = 8;
+}
+message HistoryQuery { string process = 1; }
+message HistoryList { string package_id = 1; repeated DeploymentRecord records = 2; }
+// Juno reads the history it keeps per process at each deployment, newest first.
+// An empty process lists every registered process.
+service DeploymentHistory { rpc List(HistoryQuery) returns (HistoryList); }
